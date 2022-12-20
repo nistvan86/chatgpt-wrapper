@@ -5,6 +5,7 @@ import json
 import operator
 import platform
 import sys
+import time
 import uuid
 from functools import reduce
 from time import sleep
@@ -23,6 +24,10 @@ from rich.markdown import Markdown
 console = Console()
 
 
+class TimeoutException(Exception):
+    pass
+
+
 class ChatGPT:
     """
     A ChatGPT interface that uses Playwright to run a browser,
@@ -34,7 +39,8 @@ class ChatGPT:
     eof_div_id = "chatgpt-wrapper-conversation-stream-data-eof"
     session_div_id = "chatgpt-wrapper-session-data"
 
-    def __init__(self, headless: bool = True, browser = "firefox"):
+    def __init__(self, headless: bool = True, browser = "firefox",
+                 max_wait_time: int = 900):
         self.play = sync_playwright().start()
 
         try:
@@ -52,6 +58,10 @@ class ChatGPT:
         self.parent_message_id = str(uuid.uuid4())
         self.conversation_id = None
         self.session = None
+        # maxmium time to wait for a response/thing to complete
+        # raise exception upon timeout. this way scripts can start
+        # over if the session gets stale/weird for some reason
+        self.max_wait_time = max_wait_time
 
     def _start_browser(self):
         self.page.goto("https://chat.openai.com/")
@@ -75,10 +85,13 @@ class ChatGPT:
             )
         )
 
+        start_time = time.time()
         while True:
             session_datas = self.page.query_selector_all(f"div#{self.session_div_id}")
             if len(session_datas) > 0:
                 break
+            if (time.time() - start_time) > (self.max_wait_time / 2):
+                raise TimeoutException("Timeout while trying to refresh session")
             sleep(0.2)
 
         session_data = json.loads(session_datas[0].inner_text())
@@ -173,6 +186,8 @@ class ChatGPT:
         self.page.evaluate(code)
 
         last_event_msg = ""
+        start_time = time.time()
+        # wait for a response up to 30 mins
         while True:
             eof_datas = self.page.query_selector_all(f"div#{self.eof_div_id}")
 
@@ -214,6 +229,12 @@ class ChatGPT:
                 break
 
             sleep(0.2)
+
+            # start over if we've been here for a while. it's
+            # easier to start over because often times the refresh
+            # also times out if we try to do that past here
+            if (time.time() - start_time) > self.max_wait_time:
+                raise TimeoutException("Timeout while trying to get response")
 
         self._cleanup_divs()
 
