@@ -10,6 +10,8 @@ import uuid
 from functools import reduce
 from time import sleep
 
+from typing import Iterator, Optional
+
 # use pyreadline3 instead of readline on windows
 is_windows = platform.system() == "Windows"
 if is_windows:
@@ -24,8 +26,16 @@ from rich.markdown import Markdown
 console = Console()
 
 
-class TimeoutException(Exception):
-    pass
+class ChatGptException(BaseException):
+    def __init__(self, cause: str, fatal: bool = False) -> None:
+        self.cause = cause
+        self.fatal = fatal
+
+
+class ChatGptResponse:
+    def __init__(self, text: Optional[str], error: Optional[ChatGptException] = None) -> None:
+        self.text = text
+        self.error = error
 
 
 class ChatGPT:
@@ -105,17 +115,17 @@ class ChatGPT:
         self.page.evaluate(f"document.getElementById('{self.stream_div_id}').remove()")
         self.page.evaluate(f"document.getElementById('{self.eof_div_id}').remove()")
 
-    def ask_stream(self, prompt: str):
+    def ask_stream(self, prompt: str) -> Iterator[ChatGptResponse]:
         if self.session is None:
             self.refresh_session()
 
         new_message_id = str(uuid.uuid4())
 
         if "accessToken" not in self.session:
-            yield (
-                "Your ChatGPT session is not usable.\n"
+            yield ChatGptResponse(None,
+                ChatGptException("Your ChatGPT session is not usable.\n"
                 "* Run this program with the `install` parameter and log in to ChatGPT.\n"
-                "* If you think you are already logged in, try running the `session` command."
+                "* If you think you are already logged in, try running the `session` command.", fatal=True)
             )
             return
 
@@ -212,18 +222,18 @@ class ChatGPT:
                             event["message"]["content"]["parts"]
                         )
             except Exception:
-                yield (
-                    "Failed to read response from ChatGPT.  Tips:\n"
+                yield ChatGptResponse(None,
+                    ChatGptException("Failed to read response from ChatGPT.  Tips:\n"
                     " * Try again.  ChatGPT can be flaky.\n"
                     " * Use the `session` command to refresh your session, and then try again.\n"
-                    " * Restart the program in the `install` mode and make sure you are logged in."
+                    " * Restart the program in the `install` mode and make sure you are logged in.")
                 )
                 break
 
             if full_event_message is not None:
                 chunk = full_event_message[len(last_event_msg) :]
                 last_event_msg = full_event_message
-                yield chunk
+                yield ChatGptResponse(chunk)
 
             # if we saw the eof signal, this was the last event we
             # should process and we are done
@@ -236,7 +246,8 @@ class ChatGPT:
             # easier to start over because often times the refresh
             # also times out if we try to do that past here
             if (time.time() - start_time) > self.max_wait_time:
-                raise TimeoutException("Timeout while trying to get response")
+                yield ChatGptResponse(None, ChatGptException("Timeout while trying to get response"))
+                break
 
         self._cleanup_divs()
 
@@ -250,12 +261,17 @@ class ChatGPT:
         Returns:
             str: The response received from OpenAI.
         """
-        response = list(self.ask_stream(message))
-        return (
-            reduce(operator.add, response)
-            if len(response) > 0
-            else "Unusable response produced by ChatGPT, maybe its unavailable."
-        )
+        response: list[ChatGptResponse] = []
+        for chunk in self.ask_stream(message):
+            if chunk.error:
+                raise chunk.error
+            else:
+                response.append(chunk.text)
+
+        if len(response) == 0:
+            raise ChatGptException("Unusable response produced by ChatGPT, maybe its unavailable.")
+
+        return reduce(operator.add, response)
 
     def new_conversation(self):
         self.parent_message_id = str(uuid.uuid4())
@@ -379,15 +395,22 @@ class GPTShell(cmd.Cmd):
             response = ""
             first = True
             for chunk in self.chatgpt.ask_stream(line):
+                if chunk.error:
+                    response = chunk.error
+                    break
+
                 if first:
                     print("")
                     first = False
-                print(chunk, end="")
+                print(chunk.text, end="")
                 sys.stdout.flush()
-                response += chunk
+                response += chunk.text
             print("\n")
         else:
-            response = self.chatgpt.ask(line)
+            try:
+                response = self.chatgpt.ask(line)
+            except ChatGptException as exc:
+                response = exc.cause
             print("")
             self._print_markdown(response)
 
