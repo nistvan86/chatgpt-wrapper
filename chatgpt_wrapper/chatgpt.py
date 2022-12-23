@@ -53,18 +53,20 @@ class ChatGPT:
             user_data_dir="/tmp/playwright",
             headless=headless,
         )
-        self.page = self.browser.new_page()
-        self._start_browser()
-        self.parent_message_id = str(uuid.uuid4())
-        self.conversation_id = None
-        self.session = None
+        self.reset_browser(close_page = False)
         # maxmium time to wait for a response/thing to complete
         # raise exception upon timeout. this way scripts can start
         # over if the session gets stale/weird for some reason
         self.max_wait_time = max_wait_time
 
-    def _start_browser(self):
+    def reset_browser(self, close_page: bool = True):
+        if close_page:
+            self.page.close()
+        self.page = self.browser.new_page()
         self.page.goto("https://chat.openai.com/")
+        self.parent_message_id = str(uuid.uuid4())
+        self.conversation_id = None
+        self.session = None
 
     def refresh_session(self):
         self.page.evaluate(
@@ -333,6 +335,10 @@ class GPTShell(cmd.Cmd):
         self._print_markdown("* New conversation started.")
         self._update_message_map()
         self._write_log_context()
+
+    def do_reset(self, _):
+        "`reset` closes the current browser page and opens a newone. can be useful if session gets stuck for some reason."
+        self.chatgpt.reset_browser()
 
     def do_nav(self, arg):
         "`nav` lets you navigate to a past point in the conversation. Example: `nav 2`"

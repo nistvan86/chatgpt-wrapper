@@ -1,5 +1,6 @@
 flask
 playwright
-readline; platform_system!="Windows"
+# The readline pip package is not needed with newer Python versions
+#readline; platform_system!="Windows"
 pyreadline3; platform_system=="Windows"
 rich
