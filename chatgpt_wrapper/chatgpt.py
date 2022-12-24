@@ -103,7 +103,7 @@ class ChatGPT:
             if len(session_datas) > 0:
                 break
             if (time.time() - start_time) > (self.max_wait_time / 2):
-                raise TimeoutException("Timeout while trying to refresh session")
+                raise ChatGptException("Timeout while trying to refresh session")
             sleep(0.2)
 
         session_data = json.loads(session_datas[0].inner_text())
